@@ -1,0 +1,402 @@
+---
+title: "The Young People Survey"
+author: "RM"
+date: "March 16, 2018"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+  html_notebook:
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+---
+
+In the following notebook I will analyse the "Young People Survey". At first, I will present some informations about the survey...
+
+###The Survey
+
+In 2013, students of the Statistics class at FSEV UK were asked to invite their friends to participate in this survey.
+
+* The data file (responses.csv) consists of 1010 rows and 150 columns (139 integer and 11 categorical).
+* For convenience, the original variable names were shortened in the data file. See the columns.csv file if you want to match the data with the original names.
+* The data contain missing values.
+* The survey was presented to participants in both electronic and written form.
+* The original questionnaire was in Slovak language and was later translated into English.
+* All participants were of Slovakian nationality, aged between 15-30.
+
+The variables can be split into the following groups:
+
+* Music preferences (19 items)
+* Movie preferences (12 items)
+* Hobbies & interests (32 items)
+* Phobias (10 items)
+* Health habits (3 items)
+* Personality traits, views on life, & opinions (57 items)
+* Spending habits (7 items)
+* Demographics (10 items)
+
+For a detailed item description see the section "Questionnaire".
+
+Now let's load the data:
+
+### Data Overview
+
+```{r}
+library(readr) #read csv's
+library(dplyr) #data wrangling
+library(psych) #factor analysis
+library(GPArotation) #factor analysis
+library(factoextra) #PCA visualisation
+
+
+ypdata <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/responses.csv")
+View(ypdata)
+utils::View(ypdata)
+
+ypcolumns <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/columns.csv")
+View(ypcolumns)
+```
+
+With what kind of data are we dealing with? Let's explore the dataset...
+
+
+```{r}
+str(ypdata)
+ypdata[1:5, sapply(ypdata, class) == 'character'] #show all character variables
+# Recode the character variables
+
+ypdata$Smoking[ypdata$Smoking=="never smoked"] <- 1 #how to label?
+ypdata$Smoking[ypdata$Smoking=="tried smoking"] <- 2 #how to label?
+ypdata$Smoking[ypdata$Smoking=="former smoker"] <- 3 #how to label?
+ypdata$Smoking[ypdata$Smoking=="current smoker"] <- 4 #how to label?
+
+# https://www.statmethods.net/input/valuelabels.html
+
+unique(ypdata$Alcohol) #see all different values of a variable with unique()
+ypdata$Alcohol[ypdata$Alcohol=="never"] <- 1
+ypdata$Alcohol[ypdata$Alcohol=="social drinker"] <- 2
+ypdata$Alcohol[ypdata$Alcohol=="drink a lot"] <- 3
+
+unique(ypdata$Punctuality)
+ypdata$Punctuality[ypdata$Punctuality=="i am often running late"] <- 1
+ypdata$Punctuality[ypdata$Punctuality=="i am always on time"] <- 2
+ypdata$Punctuality[ypdata$Punctuality=="i am often early"] <- 3
+
+unique(ypdata$Lying)
+ypdata$Lying[ypdata$Lying=="never"] <- 1
+ypdata$Lying[ypdata$Lying=="only to avoid hurting someone"] <- 2
+ypdata$Lying[ypdata$Lying=="sometimes"] <- 3
+ypdata$Lying[ypdata$Lying=="everytime it suits me"] <- 4
+
+unique(ypdata$`Internet usage`)
+ypdata$`Internet usage`[ypdata$`Internet usage`=="no time at all"] <- 1
+ypdata$`Internet usage`[ypdata$`Internet usage`=="less than an hour a day"] <- 2
+ypdata$`Internet usage`[ypdata$`Internet usage`=="few hours a day"] <- 3
+ypdata$`Internet usage`[ypdata$`Internet usage`=="most of the day"] <- 4
+
+unique(ypdata$Gender)
+ypdata$Gender[ypdata$Gender=="female"] <- 0
+ypdata$Gender[ypdata$Gender=="male"] <- 1
+
+unique(ypdata$`Left - right handed`)
+ypdata$`Left - right handed`[ypdata$`Left - right handed`=="left handed"] <- 0
+ypdata$`Left - right handed`[ypdata$`Left - right handed`=="right handed"] <- 1
+
+unique(ypdata$Education)
+ypdata$Education[ypdata$Education=="currently a primary school pupil"] <- 1
+ypdata$Education[ypdata$Education=="primary school"] <- 2
+ypdata$Education[ypdata$Education=="secondary school"] <- 3
+ypdata$Education[ypdata$Education=="college/bachelor degree"] <- 4
+ypdata$Education[ypdata$Education=="masters degree"] <- 5
+ypdata$Education[ypdata$Education=="doctorate degree"] <- 6
+
+unique(ypdata$`Only child`)
+ypdata$`Only child`[ypdata$`Only child`=="no"] <- 0
+ypdata$`Only child`[ypdata$`Only child`=="yes"] <- 1
+
+unique(ypdata$`Village - town`)
+ypdata$`Village - town`[ypdata$`Village - town`=="village"] <- 0
+ypdata$`Village - town`[ypdata$`Village - town`=="city"] <- 1
+
+unique(ypdata$`House - block of flats`)
+ypdata$`House - block of flats`[ypdata$`House - block of flats`=="block of flats"] <- 0
+ypdata$`House - block of flats`[ypdata$`House - block of flats`=="house/bungalow"] <- 1
+
+summary(ypdata)
+```
+
+###The Hidden Personality Traits
+
+The questionnaire contains a lot (57) of personality related items. The goal in this section is to find hidden personality traits via factor analysis and to reduce the dimensions. I will use principal component analysis (PCA), explorative factor analysis (EFA) and compare different rotation methods.
+
+To conduct a EFA 4 decisions have to be made:
+
+1) Choosing a factoranalytical method (PCA, PAF, ML)
+2) Extract a reasonable number of factors (Scree-Test)
+3) Choosing a rotation technique
+4) Choosing a method for calculation factorvalues
+
+```{r}
+personality <- ypdata[,77:133] #select relevant variables
+personality <- select(ypdata, `Daily events`:`Internet usage`) #dplyr version
+```
+Not all items are integers and some variable names include spaces which is tedious to work with. First we rename the variables and then we exclude all character variables to simplify the analysis.
+
+```{r}
+names(personality) #Replacing the spaces with underscores (see https://en.wikibooks.org/wiki/R_Programming/Text_Processing#Regular_Expressions)
+names(personality) <- gsub(" ", "_", names(personality))
+names(personality) <- gsub("'", "", names(personality))
+names(personality) <- gsub("-", "_", names(personality))
+names(personality) # The solution isn't perfect: "Small__big_dogs" has two underscores... but it's good enough
+
+personality2 <- subset(personality, select=-c(Internet_usage, Lying, Punctuality)) #select only integer variables
+```
+
+Analyse the missing values and get an overview over the data frame
+
+```{r}
+summary(personality2)
+```
+
+```{r}
+parallel <- fa.parallel(personality2, fm = 'minres', fa = 'fa')
+
+#Impute missing values with median (otherwise the FA won't work)
+
+as.numeric(as.vector(personality2))
+
+for(i in 1:ncol(personality2)){
+  personality2[is.na(personality2[,i]), i] <- median(personality2[,i], na.rm = TRUE)
+}
+
+```
+
+PCA
+https://www.promptcloud.com/blog/exploratory-factor-analysis-in-r/
+
+```{r}
+fa.plot(personality2)
+parallel <- fa.parallel(personality2, fm = 'minres', fa = 'fa')
+
+sevenfactors <- fa(personality2, nfactors = 7, rotate = "oblimin", fm = "minres")
+fivefactors <- fa(personality2, nfactors = 5, rotate = "oblimin", fm = "minres")
+threefactors <- fa(personality2, nfactors = 3, rotate = "oblimin", fm = "minres")
+
+print(fivefactors$loadings, cutoff = 0.3)
+fa.diagram(fivefactors)
+fa.plot(fivefactors)
+
+print(fivefactors$loadings, cutoff = 0.3)
+fa.diagram(fivefactors)
+fa.plot(fivefactors)
+
+print(threefactors$loadings, cutoff = 0.3)
+fa.diagram(threefactors$loadings)
+fa.plot(threefactors)
+
+
+
+fa.sort(threefactors$loadings, polar = FALSE) #better output structure
+fa.organize(sevenfactors$loadings)
+
+```
+
+
+Network Analysis
+http://sachaepskamp.com/files/Cookbook.html#network-estimation-ordinal-and-continuous-data
+https://www.kaggle.com/ankur310794/network-analysis-of-hobbies-interests
+https://eeecon.uibk.ac.at/psychoco/2011/slides/Epskamp_hdt.pdf
+https://www.researchgate.net/publication/232051481_qgraph_Network_Visualizations_of_Relationships_in_Psychometric_Data
+
+```{r}
+library(qgraph)
+Cors <- cor_auto(personality2)
+network <- qgraph(Cors, 
+                  graph = "factorial", 
+                  layout = "spring",
+                  tuning = 0.50,
+                  sampleSize = nrow(personality2),
+                  nodeNames = colnames(Cors), 
+                  legend.cex = 0.28)
+
+```
+
+
+###Questionnaire
+
+
+MUSIC PREFERENCES
+
+*    I enjoy listening to music.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer.: Slow paced music 1-2-3-4-5 Fast paced music (integer)
+*    Dance, Disco, Funk: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Folk music: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Country: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Classical: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Musicals: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Pop: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Rock: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Metal, Hard rock: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Punk: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Hip hop, Rap: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Reggae, Ska: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Swing, Jazz: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Rock n Roll: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Alternative music: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Latin: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Techno, Trance: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Opera: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+
+MOVIE PREFERENCES
+
+*    I really enjoy watching movies.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    Horror movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Thriller movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Comedies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Romantic movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Sci-fi movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    War movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Tales: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Cartoons: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Documentaries: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Western movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Action movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+
+HOBBIES & INTERESTS
+
+*    History: Not interested 1-2-3-4-5 Very interested (integer)
+*    Psychology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Politics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Mathematics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Physics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Internet: Not interested 1-2-3-4-5 Very interested (integer)
+*    PC Software, Hardware: Not interested 1-2-3-4-5 Very interested (integer)
+*    Economy, Management: Not interested 1-2-3-4-5 Very interested (integer)
+*    Biology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Chemistry: Not interested 1-2-3-4-5 Very interested (integer)
+*    Poetry reading: Not interested 1-2-3-4-5 Very interested (integer)
+*    Geography: Not interested 1-2-3-4-5 Very interested (integer)
+*    Foreign languages: Not interested 1-2-3-4-5 Very interested (integer)
+*    Medicine: Not interested 1-2-3-4-5 Very interested (integer)
+*    Law: Not interested 1-2-3-4-5 Very interested (integer)
+*    Cars: Not interested 1-2-3-4-5 Very interested (integer)
+*    Art: Not interested 1-2-3-4-5 Very interested (integer)
+*    Religion: Not interested 1-2-3-4-5 Very interested (integer)
+*    Outdoor activities: Not interested 1-2-3-4-5 Very interested (integer)
+*    Dancing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Playing musical instruments: Not interested 1-2-3-4-5 Very interested (integer)
+*    Poetry writing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Sport and leisure activities: Not interested 1-2-3-4-5 Very interested (integer)
+*    Sport at competitive level: Not interested 1-2-3-4-5 Very interested (integer)
+*    Gardening: Not interested 1-2-3-4-5 Very interested (integer)
+*    Celebrity lifestyle: Not interested 1-2-3-4-5 Very interested (integer)
+*    Shopping: Not interested 1-2-3-4-5 Very interested (integer)
+*    Science and technology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Theatre: Not interested 1-2-3-4-5 Very interested (integer)
+*    Socializing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Adrenaline sports: Not interested 1-2-3-4-5 Very interested (integer)
+*    Pets: Not interested 1-2-3-4-5 Very interested (integer)
+
+PHOBIAS
+
+*    Flying: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Thunder, lightning: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Darkness: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Heights: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Spiders: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Snakes: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Rats, mice: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Ageing: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Dangerous dogs: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Public speaking: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+
+HEALTH HABITS
+
+*    Smoking habits: Never smoked - Tried smoking - Former smoker - Current smoker (categorical)
+*    Drinking: Never - Social drinker - Drink a lot (categorical)
+*    I live a very healthy lifestyle.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+
+PERSONALITY TRAITS, VIEWS ON LIFE & OPINIONS
+
+*    I take notice of what goes on around me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I try to do tasks as soon as possible and not leave them until last minute.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always make a list so I don't forget anything.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I often study or work even in my spare time.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I look at things from all different angles before I go ahead.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe that bad people will suffer one day and good people will be rewarded.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am reliable at work and always complete all tasks given to me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always keep my promises.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can fall for someone very quickly and then completely lose interest.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I would rather have lots of friends than lots of money.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always try to be the funniest one.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can be two faced sometimes.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I damaged things in the past when angry.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I take my time to make decisions.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always try to vote in elections.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I often think about and regret the decisions I make.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can tell if people listen to me or not when I talk to them.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am a hypochondriac.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am emphatetic person.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I eat because I have to. I don't enjoy food and eat as fast as I can.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I try to give as much as I can to other people at Christmas.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I don't like seeing animals suffering.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I look after things I have borrowed from others.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I feel lonely in life.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I used to cheat at school.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I worry about my health.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I wish I could change the past because of the things I have done.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe in God.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always have good dreams.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always give to charity.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have lots of friends.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    Timekeeping.: I am often early. - I am always on time. - I am often running late. (categorical)
+*    Do you lie to others?: Never. - Only to avoid hurting someone. - Sometimes. - Everytime it suits me. (categorical)
+*    I am very patient.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can quickly adapt to a new environment.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    My moods change quickly.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am well mannered and I look after my appearance.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy meeting new people.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always let other people know about my achievements.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I think carefully before answering any important letters.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy childrens' company.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am not afraid to give my opinion if I feel strongly about something.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can get angry very easily.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always make sure I connect with the right people.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have to be well prepared before public speaking.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I will find a fault in myself if people don't like me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I cry when I feel down or things don't go the right way.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am 100% happy with my life.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am always full of life and energy.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer big dangerous dogs to smaller, calmer dogs.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe all my personality traits are positive.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    If I find something the doesn't belong to me I will hand it in.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I find it very difficult to get up in the morning.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have many different hobbies and interests.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always listen to my parents' advice.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy taking part in surveys.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    How much time do you spend online?: No time at all - Less than an hour a day - Few hours a day - Most of the day (categorical)
+
+SPENDING HABITS
+
+*    I save all the money I can.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy going to large shopping centres.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer branded clothing to non branded.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on partying and socializing.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on my appearance.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on gadgets.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I will hapilly pay more money for good, quality or healthy food.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+
+DEMOGRAPHICS
+
+*    Age: (integer)
+*    Height: (integer)
+*    Weight: (integer)
+*    How many siblings do you have?: (integer)
+*    Gender: Female - Male (categorical)
+*    I am: Left handed - Right handed (categorical)
+*    Highest education achieved: Currently a Primary school pupil - Primary school - Secondary school - College/Bachelor degree (categorical)
+*    I am the only child: No - Yes (categorical)
+*    I spent most of my childhood in a: City - village (categorical)
+*    I lived most of my childhood in a: house/bungalow - block of flats (categorical)
