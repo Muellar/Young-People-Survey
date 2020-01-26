@@ -53,6 +53,7 @@ library(factoextra) #PCA visualisation
 
 ypdata <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/responses.csv")
 View(ypdata)
+dim(ypdata)
 utils::View(ypdata)
 
 ypcolumns <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/columns.csv")
