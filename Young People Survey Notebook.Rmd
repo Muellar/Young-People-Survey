@@ -11,7 +11,6 @@ output:
     theme: cerulean
     toc: yes
     toc_depth: 3
-    keep_md: true
 ---
 
 In the following notebook I will analyse the "Young People Survey". At first, I will present some informations about the survey...
@@ -101,6 +100,7 @@ ypdata$`Internet usage`[ypdata$`Internet usage`=="most of the day"] <- 4
 unique(ypdata$Gender)
 ypdata$Gender[ypdata$Gender=="female"] <- 0
 ypdata$Gender[ypdata$Gender=="male"] <- 1
+ypdata$Gender <- as.numeric(ypdata$Gender)
 
 unique(ypdata$`Left - right handed`)
 ypdata$`Left - right handed`[ypdata$`Left - right handed`=="left handed"] <- 0
@@ -222,6 +222,71 @@ network <- qgraph(Cors,
                   sampleSize = nrow(personality2),
                   nodeNames = colnames(Cors), 
                   legend.cex = 0.28)
+
+```
+
+###Predicting Gender
+
+In the following section we will try to predict the gender of the participants.
+
+##The Search for potential Predictor Variables
+
+```{r}
+# calculate the correlations
+cors <- as.data.frame(t(cor(ypdata$Gender, select_if(ypdata, is.numeric), 
+    method = "pearson",
+    use = "complete.obs")))
+
+# add the item names as separate column
+cors$item <- rownames(cors)
+
+# 10 lowest correlations
+lowest <- cors[order(cors$V1)[1:10],]
+
+# 10 highest correlations
+highest <- cors[order(cors$V1, decreasing = T)[1:10],]
+
+```
+
+##Logistic Regression
+
+```{r}
+
+logr_model <- glm(Gender ~ 
+                    Height + 
+                    Weight + 
+                    PC +
+                    Cars +
+                    Action +
+                    War +
+                    `Science and technology` +
+                    Western +
+                    `Sci-fi` +
+                    Romantic +
+                    Shopping +
+                    Reading +
+                    Dancing +
+                    Darkness +
+                    Theatre +
+                    Storm +
+                    Spiders +
+                    `Fantasy/Fairy tales`,
+                  family = "binomial", 
+                  data = ypdata)
+
+summary(logr_model)
+
+# Remove not significant coefficients
+
+# R^2 (https://thestatsgeek.com/2014/02/08/r-squared-in-logistic-regression/)
+null_model <- glm(Gender ~ 1, family = "binomial", data = ypdata)
+1-logLik(logr_model) / logLik(null_model)
+
+# Predictions
+predicted <- predict(logr_model, type = "response", newdata = ypdata)
+predicted <- ifelse(predicted > 0.5, 1, 0)
+ypdata$predicted <- predicted
+table(ypdata$predicted, predicted) # Overfitting
 
 ```
 
