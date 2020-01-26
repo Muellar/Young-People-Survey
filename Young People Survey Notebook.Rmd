@@ -11,6 +11,7 @@ output:
     theme: cerulean
     toc: yes
     toc_depth: 3
+    keep_md: true
 ---
 
 In the following notebook I will analyse the "Young People Survey". At first, I will present some informations about the survey...
