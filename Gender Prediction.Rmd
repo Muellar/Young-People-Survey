@@ -1,0 +1,368 @@
+---
+title: "Predicting Gender through Hobbies and Interests"
+author: "RM"
+date: "June 28, 2020"
+output:
+  html_notebook:
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+---
+
+The goal of the following project is to predict the gender based on the information what kind of hobbies a person has. The Young People Survey is used as the data basis.
+
+###The Survey
+
+In 2013, students of the Statistics class at FSEV UK were asked to invite their friends to participate in this survey.
+
+* The data file (responses.csv) consists of 1010 rows and 150 columns (139 integer and 11 categorical).
+* For convenience, the original variable names were shortened in the data file. See the columns.csv file if you want to match the data with the original names.
+* The data contain missing values.
+* The survey was presented to participants in both electronic and written form.
+* The original questionnaire was in Slovak language and was later translated into English.
+* All participants were of Slovakian nationality, aged between 15-30.
+
+The variables can be split into the following groups:
+
+
+* Hobbies & interests (32 items)
+
+For a detailed item description see the section "Questionnaire".
+
+Now let's load the data:
+
+### Data Import
+
+```{r}
+# Library import
+library(readr) # read csv's
+library(dplyr) # data wrangling
+library(mice) # missing values
+library(ggplot2) # visualisation
+library(boot) # crossvalidation
+library(ppcor) # partial correlation
+
+# Load data
+data <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/responses.csv")
+
+hobbies <- colnames(data[,32:63]) # all hobby variables
+data <- data[, c("Gender", hobbies)] # select necessary data
+
+ypcolumns <- read_csv("D:/Statistik/R Trainingground/Data/Young People Survey/young-people-survey/columns.csv")
+
+```
+
+The hobby and interest variables are integers and R imported them als numeric variables. In the questionnaire the variables were recorded as likert scales from 1 (Not interested) to 5 (Very interested). So strictly speaking the variables are ordinal and not interval scaled which is the reason we will additionaly code them as factors. We will later test the impact of those different codings.
+
+```{r}
+# Factor creation
+data$Gender <- ifelse(data$Gender=="female", 0, 
+                      ifelse(data$Gender=="male", 1, NA))
+data[,hobbies] <- lapply(data[, hobbies], factor)
+```
+
+
+### Data Overview
+
+With what kind of data are we dealing with? Let's explore the dataset...
+
+
+```{r}
+data %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+  facet_wrap(~ key, scales = "free") +
+    geom_bar()
+```
+
+### Missing Values
+
+Before we begin with the modelling we first want to check wether there are missing values.
+
+```{r}
+apply(data, 2, function(x) sum(is.na(x)))
+```
+
+It seems the data is pretty complete! There are only a few missings. We could simply delete all rows with missing values (i.e. listwise deletion) and accordingly lose some data. 
+
+```{r}
+table(complete.cases(data), dnn = c("Does the row contain missing values?"))
+```
+
+So with listwise deletion we would delete `r table(complete.cases(data))[1]` rows, which is quite alot. Because of this we decide to impute (i.e. estimate) some missing values.
+
+We could impute the mean (if we wrongly assume that the likert scales are continous variables). This would be a very fast and simple method but would underestimate the variance of the respective variable. With only such a few missings, it seems this wouldn't be really a problem. Anyway, we want to try a more sophisticated method.
+
+We basically have another little prediction problem within our orginal prediction task.
+
+
+### Split Training- / Testset
+
+Now we will split the dataset into a training and test set.
+
+```{r}
+data <- data %>% mutate(id = row_number())# create ID numbers
+
+train <- data %>% sample_frac(.75) # create training set
+test  <- anti_join(data, train, by = 'id') # create test set
+```
+
+Crossvalidation Techniques
+
+### Predicting Gender
+
+In the following section we will try to predict the gender of the participants.
+
+## The Search for potential Predictor Variables (Feature Selection)
+
+As already mentioned we will restrict the predictor variables. So we will only use hobbies and nothing else.
+Why do we wanna select only a few predictors (i.e. hobbies) and not simply add all in the model? After all, the goal is prediction and not interpretability. One reason is that in logistic regression multicollinearity can be a problem. So we should remove highly correlated predictors (or merge them together via PCA or similar methods). Other reason can be computational efficacy, interpretability or in a real world setting lower cost in acquiring data. Kuhn et al. showed, that the performance with additional predictors can even decrease.
+
+```{r}
+pcor(data, method = "pearson")
+```
+
+
+```{r}
+# calculate the correlations
+cors <- as.data.frame(t(cor(data$Gender, select_if(data, hobbies), 
+    method = "pearson",
+    use = "complete.obs")))
+
+# add the item names as separate column
+cors$item <- rownames(cors)
+
+# 10 lowest correlations
+lowest <- cors[order(cors$V1)[1:10],]
+
+# 10 highest correlations
+highest <- cors[order(cors$V1, decreasing = T)[1:10],]
+
+```
+
+##Logistic Regression
+
+We will use logistic regression for the predictions. An advantage of logistic regression is that we can infere from the output which predictors are especially important for the predictions.
+
+```{r}
+
+logr_model <- glm(Gender ~ .,
+                  family = "binomial", 
+                  data = na.omit(data))
+
+summary(logr_model)
+
+cost <- function(r, pi = 0) mean(abs(r - pi) > 0.5) # define cost function
+# this cost function calculates the percentage of the missclassified cases (r is the real value (0 or 1 for female and male) and pi the predicted probability). For pi > 0.5 is the prediction "male" for pi <= 0.5 "female".
+cv.err <- cv.glm(na.omit(data), logr_model, K = 10)$delta
+
+# Remove not significant coefficients
+
+# R^2 (https://thestatsgeek.com/2014/02/08/r-squared-in-logistic-regression/)
+null_model <- glm(Gender ~ 1, family = "binomial", data = ypdata)
+1-logLik(logr_model) / logLik(null_model)
+
+# Predictions
+predicted <- predict(logr_model, type = "response", newdata = data)
+predicted <- ifelse(predicted > 0.5, 1, 0)
+data$predicted <- predicted
+table(data$predicted, predicted) # Overfitting
+
+
+model1 <- glm(Gender ~ .,
+                  family = "binomial", 
+                  data = train)
+summary(model1)
+
+test$predicted <- predict(model1, type = "response", newdata = test)
+test$predicted <- ifelse(test$predicted > 0.5, 1, 0)
+table(test$Gender, test$predicted)
+prop.table(table(test$Gender, test$predicted))
+# 87% korrekt vorhergesagt
+```
+
+## Measuring Performance
+http://www.feat.engineering/measuring-performance.html#class-metrics
+
+##LightGBM
+
+###Questionnaire
+
+
+MUSIC PREFERENCES
+
+*    I enjoy listening to music.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer.: Slow paced music 1-2-3-4-5 Fast paced music (integer)
+*    Dance, Disco, Funk: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Folk music: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Country: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Classical: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Musicals: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Pop: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Rock: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Metal, Hard rock: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Punk: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Hip hop, Rap: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Reggae, Ska: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Swing, Jazz: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Rock n Roll: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Alternative music: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Latin: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Techno, Trance: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Opera: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+
+MOVIE PREFERENCES
+
+*    I really enjoy watching movies.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    Horror movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Thriller movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Comedies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Romantic movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Sci-fi movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    War movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Tales: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Cartoons: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Documentaries: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Western movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+*    Action movies: Don't enjoy at all 1-2-3-4-5 Enjoy very much (integer)
+
+HOBBIES & INTERESTS
+
+*    History: Not interested 1-2-3-4-5 Very interested (integer)
+*    Psychology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Politics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Mathematics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Physics: Not interested 1-2-3-4-5 Very interested (integer)
+*    Internet: Not interested 1-2-3-4-5 Very interested (integer)
+*    PC Software, Hardware: Not interested 1-2-3-4-5 Very interested (integer)
+*    Economy, Management: Not interested 1-2-3-4-5 Very interested (integer)
+*    Biology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Chemistry: Not interested 1-2-3-4-5 Very interested (integer)
+*    Poetry reading: Not interested 1-2-3-4-5 Very interested (integer)
+*    Geography: Not interested 1-2-3-4-5 Very interested (integer)
+*    Foreign languages: Not interested 1-2-3-4-5 Very interested (integer)
+*    Medicine: Not interested 1-2-3-4-5 Very interested (integer)
+*    Law: Not interested 1-2-3-4-5 Very interested (integer)
+*    Cars: Not interested 1-2-3-4-5 Very interested (integer)
+*    Art: Not interested 1-2-3-4-5 Very interested (integer)
+*    Religion: Not interested 1-2-3-4-5 Very interested (integer)
+*    Outdoor activities: Not interested 1-2-3-4-5 Very interested (integer)
+*    Dancing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Playing musical instruments: Not interested 1-2-3-4-5 Very interested (integer)
+*    Poetry writing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Sport and leisure activities: Not interested 1-2-3-4-5 Very interested (integer)
+*    Sport at competitive level: Not interested 1-2-3-4-5 Very interested (integer)
+*    Gardening: Not interested 1-2-3-4-5 Very interested (integer)
+*    Celebrity lifestyle: Not interested 1-2-3-4-5 Very interested (integer)
+*    Shopping: Not interested 1-2-3-4-5 Very interested (integer)
+*    Science and technology: Not interested 1-2-3-4-5 Very interested (integer)
+*    Theatre: Not interested 1-2-3-4-5 Very interested (integer)
+*    Socializing: Not interested 1-2-3-4-5 Very interested (integer)
+*    Adrenaline sports: Not interested 1-2-3-4-5 Very interested (integer)
+*    Pets: Not interested 1-2-3-4-5 Very interested (integer)
+
+PHOBIAS
+
+*    Flying: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Thunder, lightning: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Darkness: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Heights: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Spiders: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Snakes: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Rats, mice: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Ageing: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Dangerous dogs: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+*    Public speaking: Not afraid at all 1-2-3-4-5 Very afraid of (integer)
+
+HEALTH HABITS
+
+*    Smoking habits: Never smoked - Tried smoking - Former smoker - Current smoker (categorical)
+*    Drinking: Never - Social drinker - Drink a lot (categorical)
+*    I live a very healthy lifestyle.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+
+PERSONALITY TRAITS, VIEWS ON LIFE & OPINIONS
+
+*    I take notice of what goes on around me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I try to do tasks as soon as possible and not leave them until last minute.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always make a list so I don't forget anything.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I often study or work even in my spare time.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I look at things from all different angles before I go ahead.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe that bad people will suffer one day and good people will be rewarded.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am reliable at work and always complete all tasks given to me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always keep my promises.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can fall for someone very quickly and then completely lose interest.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I would rather have lots of friends than lots of money.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always try to be the funniest one.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can be two faced sometimes.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I damaged things in the past when angry.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I take my time to make decisions.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always try to vote in elections.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I often think about and regret the decisions I make.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can tell if people listen to me or not when I talk to them.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am a hypochondriac.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am emphatetic person.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I eat because I have to. I don't enjoy food and eat as fast as I can.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I try to give as much as I can to other people at Christmas.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I don't like seeing animals suffering.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I look after things I have borrowed from others.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I feel lonely in life.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I used to cheat at school.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I worry about my health.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I wish I could change the past because of the things I have done.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe in God.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always have good dreams.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always give to charity.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have lots of friends.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    Timekeeping.: I am often early. - I am always on time. - I am often running late. (categorical)
+*    Do you lie to others?: Never. - Only to avoid hurting someone. - Sometimes. - Everytime it suits me. (categorical)
+*    I am very patient.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can quickly adapt to a new environment.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    My moods change quickly.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am well mannered and I look after my appearance.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy meeting new people.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always let other people know about my achievements.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I think carefully before answering any important letters.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy childrens' company.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am not afraid to give my opinion if I feel strongly about something.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I can get angry very easily.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always make sure I connect with the right people.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have to be well prepared before public speaking.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I will find a fault in myself if people don't like me.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I cry when I feel down or things don't go the right way.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am 100% happy with my life.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I am always full of life and energy.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer big dangerous dogs to smaller, calmer dogs.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I believe all my personality traits are positive.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    If I find something the doesn't belong to me I will hand it in.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I find it very difficult to get up in the morning.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I have many different hobbies and interests.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I always listen to my parents' advice.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy taking part in surveys.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    How much time do you spend online?: No time at all - Less than an hour a day - Few hours a day - Most of the day (categorical)
+
+SPENDING HABITS
+
+*    I save all the money I can.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I enjoy going to large shopping centres.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I prefer branded clothing to non branded.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on partying and socializing.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on my appearance.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I spend a lot of money on gadgets.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+*    I will hapilly pay more money for good, quality or healthy food.: Strongly disagree 1-2-3-4-5 Strongly agree (integer)
+
+DEMOGRAPHICS
+
+*    Age: (integer)
+*    Height: (integer)
+*    Weight: (integer)
+*    How many siblings do you have?: (integer)
+*    Gender: Female - Male (categorical)
+*    I am: Left handed - Right handed (categorical)
+*    Highest education achieved: Currently a Primary school pupil - Primary school - Secondary school - College/Bachelor degree (categorical)
+*    I am the only child: No - Yes (categorical)
+*    I spent most of my childhood in a: City - village (categorical)
+*    I lived most of my childhood in a: house/bungalow - block of flats (categorical)
